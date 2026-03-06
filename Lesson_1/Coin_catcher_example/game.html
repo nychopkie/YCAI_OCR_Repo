@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Coin Catcher Game</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            background: #0a0a1a;
+            overflow: hidden;
+            font-family: Arial, sans-serif;
+        }
+        
+        #gameCanvas {
+            display: block;
+            background: radial-gradient(ellipse at center, #1a1a3a 0%, #0a0a1a 100%);
+            margin: 0 auto;
+        }
+        
+        #scoreDisplay {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: #ffeb3b;
+            font-size: 32px;
+            font-weight: bold;
+            text-shadow: 0 0 10px #ffeb3b;
+            z-index: 10;
+        }
+        
+        #gameOver {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #fff;
+            font-size: 48px;
+            font-weight: bold;
+            text-align: center;
+            display: none;
+            z-index: 20;
+            text-shadow: 0 0 20px #ffeb3b;
+        }
+        
+        #gameOver p {
+            margin: 20px 0;
+            font-size: 24px;
+            color: #ffeb3b;
+        }
+    </style>
+</head>
+<body>
+    <div id="scoreDisplay">Score: 0</div>
+    <div id="gameOver">
+        <div>Game Over!</div>
+        <p id="finalScore"></p>
+        <p style="font-size: 18px;">Press SPACE to restart</p>
+    </div>
+    <canvas id="gameCanvas"></canvas>
+    
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreDisplay = document.getElementById('scoreDisplay');
+        const gameOverDiv = document.getElementById('gameOver');
+        const finalScoreDisplay = document.getElementById('finalScore');
+
+        // High-DPI + resize-friendly canvas
+        const DPR = () => Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+        function resizeCanvas() {
+            const dpr = DPR();
+            const w = Math.max(320, window.innerWidth);
+            const h = Math.max(240, window.innerHeight);
+            canvas.style.width = w + 'px';
+            canvas.style.height = h + 'px';
+            canvas.width = Math.floor(w * dpr);
+            canvas.height = Math.floor(h * dpr);
+            ctx.setTransform(dpr, 0, 0, dpr, 0, 0); // draw in CSS pixels
+        }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        // --- Game state (WORLD SPACE) ---
+        let score = 0;
+        let misses = 0;
+        let gameRunning = true;
+        const keys = Object.create(null);
+
+        // Basket exists in world-x, screen-y (camera only tracks x).
+        const basket = {
+            worldX: 0,
+            y: 0,
+            width: 110,
+            height: 60,
+            maxSpeed: 520,     // px/sec
+            accel: 2400,       // px/sec^2
+            friction: 2200,    // px/sec^2
+            vx: 0
+        };
+
+        // Smooth tracking camera (world-x only)
+        const camera = {
+            x: 0,
+            followStrength: 10 // higher = snappier follow
+        };
+
+        // Infinite repeating sectors for background
+        const SECTOR_W = 480;
+        const SEED = 1337;
+
+        // Coins in world space (worldX, y)
+        let coins = [];
+        let spawnTimer = 0;
+        let spawnEvery = 0.8;     // seconds
+        let difficultyTimer = 0;
+
+        // Optional: world gently scrolls right even if you don't press keys
+        const AUTO_SCROLL = 60; // px/sec
+
+        // --- Input ---
+        document.addEventListener('keydown', (e) => {
+            keys[e.key] = true;
+            if (e.key === ' ' && !gameRunning) restartGame();
+        });
+        document.addEventListener('keyup', (e) => {
+            keys[e.key] = false;
+        });
+
+        // --- Helpers ---
+        function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+        function lerp(a, b, t) { return a + (b - a) * t; }
+        function mulberry32(seed) {
+            let t = seed >>> 0;
+            return function() {
+                t += 0x6D2B79F5;
+                let x = Math.imul(t ^ (t >>> 15), 1 | t);
+                x ^= x + Math.imul(x ^ (x >>> 7), 61 | x);
+                return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
+            };
+        }
+
+        function screenWidth() { return parseFloat(canvas.style.width) || window.innerWidth; }
+        function screenHeight() { return parseFloat(canvas.style.height) || window.innerHeight; }
+
+        function basketScreenX() {
+            return (screenWidth() * 0.5) + (basket.worldX - camera.x) - basket.width * 0.5;
+        }
+
+        function worldToScreenX(wx) {
+            return (screenWidth() * 0.5) + (wx - camera.x);
+        }
+
+        function resetLayout() {
+            basket.y = screenHeight() - 90;
+        }
+        resetLayout();
+        window.addEventListener('resize', resetLayout);
+
+        // --- Background (repeating sectors) ---
+        function drawSpaceBackground() {
+            const w = screenWidth();
+            const h = screenHeight();
+
+            // Base gradient (deep space)
+            const g = ctx.createRadialGradient(w * 0.5, h * 0.3, 10, w * 0.5, h * 0.4, Math.max(w, h));
+            g.addColorStop(0, '#1b1b3f');
+            g.addColorStop(1, '#070712');
+            ctx.fillStyle = g;
+            ctx.fillRect(0, 0, w, h);
+
+            // Determine which sectors are visible based on camera.x
+            const viewLeftWorld = camera.x - w * 0.5;
+            const viewRightWorld = camera.x + w * 0.5;
+            const leftSector = Math.floor(viewLeftWorld / SECTOR_W) - 1;
+            const rightSector = Math.floor(viewRightWorld / SECTOR_W) + 1;
+
+            // Parallax makes it feel deeper (sectors still repeat infinitely)
+            const parallax = 0.35;
+            const parallaxCamX = camera.x * parallax;
+
+            for (let s = leftSector; s <= rightSector; s++) {
+                const rng = mulberry32((SEED ^ (s * 0x9E3779B1)) >>> 0);
+
+                // Sector origin in parallax-world
+                const sectorWorldX = s * SECTOR_W;
+                const sectorScreenX = (w * 0.5) + (sectorWorldX - parallaxCamX);
+
+                // Soft nebula band (repeats per sector)
+                const nebulaY = rng() * h * 0.6 + h * 0.1;
+                const nebulaW = SECTOR_W * (0.8 + rng() * 0.9);
+                const nebulaH = 120 + rng() * 140;
+                const nebulaX = sectorScreenX + rng() * (SECTOR_W - nebulaW);
+                const ng = ctx.createRadialGradient(nebulaX + nebulaW * 0.5, nebulaY, 10, nebulaX + nebulaW * 0.5, nebulaY, nebulaW * 0.7);
+                ng.addColorStop(0, `rgba(120, 80, 255, ${0.08 + rng() * 0.07})`);
+                ng.addColorStop(1, 'rgba(0, 0, 0, 0)');
+                ctx.fillStyle = ng;
+                ctx.beginPath();
+                ctx.ellipse(nebulaX + nebulaW * 0.5, nebulaY, nebulaW * 0.5, nebulaH * 0.5, 0, 0, Math.PI * 2);
+                ctx.fill();
+
+                // Stars (deterministic per sector)
+                const starCount = 42;
+                for (let i = 0; i < starCount; i++) {
+                    const x = sectorScreenX + rng() * SECTOR_W;
+                    const y = rng() * h;
+                    const r = 0.6 + rng() * 1.8;
+                    const a = 0.25 + rng() * 0.75;
+                    ctx.fillStyle = `rgba(255,255,255,${a})`;
+                    ctx.beginPath();
+                    ctx.arc(x, y, r, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+
+                // Faint sector seam lines (helps you "feel" the repeat)
+                ctx.strokeStyle = 'rgba(255, 255, 255, 0.04)';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(sectorScreenX, 0);
+                ctx.lineTo(sectorScreenX, h);
+                ctx.stroke();
+            }
+        }
+
+        // --- Drawing game objects ---
+        function drawBasket() {
+            const x = basketScreenX();
+            const y = basket.y;
+
+            // Basket body
+            ctx.fillStyle = '#8B4513';
+            ctx.fillRect(x, y, basket.width, basket.height);
+
+            // Basket rim
+            ctx.fillStyle = '#654321';
+            ctx.fillRect(x, y, basket.width, 10);
+
+            // Basket weave pattern
+            ctx.strokeStyle = 'rgba(0,0,0,0.25)';
+            ctx.lineWidth = 2;
+            const cols = 6;
+            for (let i = 1; i < cols; i++) {
+                const px = x + (i * basket.width) / cols;
+                ctx.beginPath();
+                ctx.moveTo(px, y + 10);
+                ctx.lineTo(px, y + basket.height);
+                ctx.stroke();
+            }
+        }
+
+        function drawCoin(coin) {
+            const x = worldToScreenX(coin.worldX);
+            const y = coin.y;
+
+            // Skip if far offscreen (cheap cull)
+            if (x < -60 || x > screenWidth() + 60) return;
+
+            // Glow
+            ctx.save();
+            ctx.shadowColor = '#ffeb3b';
+            ctx.shadowBlur = 14;
+
+            // Outer
+            ctx.beginPath();
+            ctx.arc(x, y, coin.r, 0, Math.PI * 2);
+            ctx.fillStyle = '#ffeb3b';
+            ctx.fill();
+
+            // Inner
+            ctx.beginPath();
+            ctx.arc(x, y, Math.max(2, coin.r - 4), 0, Math.PI * 2);
+            ctx.fillStyle = '#fdd835';
+            ctx.fill();
+
+            // Shine
+            ctx.beginPath();
+            ctx.arc(x - coin.r * 0.25, y - coin.r * 0.25, Math.max(2, coin.r * 0.33), 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(255,255,255,0.55)';
+            ctx.fill();
+
+            // Edge stroke
+            ctx.shadowBlur = 0;
+            ctx.beginPath();
+            ctx.arc(x, y, coin.r, 0, Math.PI * 2);
+            ctx.strokeStyle = 'rgba(255,235,59,0.9)';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+            ctx.restore();
+        }
+
+        // --- Spawning / updating ---
+        function spawnCoin() {
+            const w = screenWidth();
+            const left = camera.x - w * 0.5;
+            const right = camera.x + w * 0.5;
+
+            // Spawn within (and a bit beyond) visible range so it feels natural with smoothing
+            const coin = {
+                worldX: left + Math.random() * (right - left),
+                y: -30,
+                r: 14 + Math.random() * 4,
+                vy: 140 + Math.random() * 140 // px/sec
+            };
+            coins.push(coin);
+        }
+
+        function updateBasket(dt) {
+            // Auto-scroll to keep the world moving horizontally
+            basket.worldX += AUTO_SCROLL * dt;
+
+            const left = keys['ArrowLeft'] ? 1 : 0;
+            const right = keys['ArrowRight'] ? 1 : 0;
+            const input = right - left;
+
+            if (input !== 0) {
+                basket.vx += input * basket.accel * dt;
+            } else {
+                // Friction toward 0
+                const sign = Math.sign(basket.vx);
+                const mag = Math.max(0, Math.abs(basket.vx) - basket.friction * dt);
+                basket.vx = mag * sign;
+            }
+
+            basket.vx = clamp(basket.vx, -basket.maxSpeed, basket.maxSpeed);
+            basket.worldX += basket.vx * dt;
+        }
+
+        function updateCamera(dt) {
+            // Smoothly follow basket (keeps basket near the center)
+            const t = 1 - Math.exp(-camera.followStrength * dt);
+            camera.x = lerp(camera.x, basket.worldX, t);
+        }
+
+        function updateCoins(dt) {
+            const h = screenHeight();
+
+            for (let i = coins.length - 1; i >= 0; i--) {
+                const c = coins[i];
+                c.y += c.vy * dt;
+
+                // Collision check in WORLD-X, SCREEN-Y
+                const bx0 = basket.worldX - basket.width * 0.5;
+                const bx1 = basket.worldX + basket.width * 0.5;
+                const by0 = basket.y;
+                const by1 = basket.y + basket.height;
+
+                if (c.y + c.r > by0 && c.y - c.r < by1 && c.worldX > bx0 && c.worldX < bx1) {
+                    score += 10;
+                    scoreDisplay.textContent = `Score: ${score}`;
+                    coins.splice(i, 1);
+                    continue;
+                }
+
+                // Missed coin
+                if (c.y > h + 40) {
+                    coins.splice(i, 1);
+                    misses++;
+                    if (misses >= 5) endGame();
+                }
+            }
+        }
+
+        function endGame() {
+            gameRunning = false;
+            finalScoreDisplay.textContent = `Final Score: ${score}`;
+            gameOverDiv.style.display = 'block';
+        }
+
+        // --- Main loop ---
+        let lastT = performance.now();
+        function gameLoop(t) {
+            if (!gameRunning) return;
+
+            const dt = clamp((t - lastT) / 1000, 0, 0.05);
+            lastT = t;
+
+            // Difficulty: slightly faster spawns over time
+            difficultyTimer += dt;
+            if (difficultyTimer >= 2) {
+                difficultyTimer = 0;
+                spawnEvery = Math.max(0.28, spawnEvery * 0.985);
+            }
+
+            updateBasket(dt);
+            updateCamera(dt);
+            updateCoins(dt);
+
+            spawnTimer += dt;
+            while (spawnTimer >= spawnEvery) {
+                spawnTimer -= spawnEvery;
+                spawnCoin();
+            }
+
+            // Draw
+            drawSpaceBackground();
+            coins.forEach(drawCoin);
+            drawBasket();
+
+            requestAnimationFrame(gameLoop);
+        }
+
+        function restartGame() {
+            score = 0;
+            misses = 0;
+            coins = [];
+            spawnTimer = 0;
+            spawnEvery = 0.8;
+            difficultyTimer = 0;
+
+            basket.worldX = 0;
+            basket.vx = 0;
+            camera.x = 0;
+            resetLayout();
+
+            gameRunning = true;
+            scoreDisplay.textContent = 'Score: 0';
+            gameOverDiv.style.display = 'none';
+            lastT = performance.now();
+            requestAnimationFrame(gameLoop);
+        }
+
+        // Start
+        requestAnimationFrame((t) => {
+            lastT = t;
+            requestAnimationFrame(gameLoop);
+        });
+    </script>
+</body>
+</html>
