@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>1v1 Boxing Game</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="game-container">
+        <h1>🥊 1v1 Boxing Game 🥊</h1>
+        
+        <div class="timer-display" id="timer-display">
+            <h2>Time: <span id="timer">60</span>s</h2>
+        </div>
+        
+        <div class="health-bars">
+            <div class="player-health">
+                <h2>Player 1</h2>
+                <div class="health-bar-container">
+                    <div class="health-bar" id="player1-health">
+                        <span id="player1-hp">100 HP</span>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="player-health">
+                <h2>Player 2</h2>
+                <div class="health-bar-container">
+                    <div class="health-bar" id="player2-health">
+                        <span id="player2-hp">100 HP</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="game-area" id="game-area">
+            <div class="wall" style="left: 150px; top: 50px; width: 20px; height: 150px;"></div>
+            <div class="wall" style="left: 350px; top: 100px; width: 100px; height: 20px;"></div>
+            <div class="wall" style="left: 550px; top: 50px; width: 20px; height: 150px;"></div>
+            <div class="wall" style="left: 250px; top: 250px; width: 100px; height: 20px;"></div>
+            <div class="wall" style="left: 400px; top: 280px; width: 20px; height: 100px;"></div>
+            
+            <div class="player" id="player1">
+                <div class="fighter">🧑</div>
+                <p>Player 1</p>
+                <div class="cooldown" id="p1-cooldown">Skill Ready!</div>
+            </div>
+            
+            <div class="player" id="player2">
+                <div class="fighter">🧑</div>
+                <p>Player 2</p>
+                <div class="cooldown" id="p2-cooldown">Skill Ready!</div>
+            </div>
+        </div>
+        
+        <div class="controls">
+            <div class="control-section">
+                <h3>Player 1 Controls</h3>
+                <p><strong>W/A/S/D</strong> - Move</p>
+                <p><strong>Q</strong> - Dash Forward</p>
+                <p><strong>SPACE</strong> - Punch (10 HP)</p>
+                <p><strong>F</strong> - Special Skill (20 HP)</p>
+            </div>
+            <div class="control-section">
+                <h3>Player 2 Controls</h3>
+                <p><strong>Arrow Keys</strong> - Move</p>
+                <p><strong>SHIFT</strong> - Dash Forward</p>
+                <p><strong>ENTER</strong> - Punch (10 HP)</p>
+                <p><strong>CTRL</strong> - Special Skill (20 HP)</p>
+            </div>
+        </div>
+        
+        <div id="game-message"></div>
+        
+        <button id="restart-btn" class="restart-btn" style="display: none;">Play Again</button>
+    </div>
+    
+    <script src="game.js"></script>
+</body>
+</html>
